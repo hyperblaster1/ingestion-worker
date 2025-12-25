@@ -20,8 +20,16 @@ npm run prisma:generate
 3. Set up environment variables:
 Create a `.env` file with:
 ```
-DATABASE_URL="postgresql://user:password@localhost:5432/database"
+# For Railway: Use the connection pooling URL if available
+# Add connection limits to prevent "too many clients" errors
+DATABASE_URL="postgresql://user:password@localhost:5432/database?connection_limit=5&pool_timeout=10"
 ```
+
+**Important for Railway Deployment:**
+- Railway's PostgreSQL has limited connections (typically 20-100)
+- The worker + frontend share the same database
+- Use connection pooling parameters: `?connection_limit=5&pool_timeout=10`
+- Or use Railway's pooled connection URL if available (check database variables)
 
 4. Run the worker:
 ```bash
