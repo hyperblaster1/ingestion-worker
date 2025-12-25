@@ -5,9 +5,11 @@
   "description": "Standalone ingestion worker for analytics platform",
   "main": "worker.ts",
   "scripts": {
-    "start": "ts-node --project tsconfig.json worker.ts",
+    "start": "node dist/worker.js",
     "dev": "ts-node --project tsconfig.json worker.ts",
-    "build": "tsc --project tsconfig.json",
+    "build": "prisma generate && tsc --project tsconfig.json",
+    "postinstall": "prisma generate",
+    "railway:start": "prisma db push --accept-data-loss && node dist/worker.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
