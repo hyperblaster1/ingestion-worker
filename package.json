@@ -1,0 +1,29 @@
+{
+  "name": "ingestion-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone ingestion worker for analytics platform",
+  "main": "worker.ts",
+  "scripts": {
+    "start": "ts-node --project tsconfig.json worker.ts",
+    "dev": "ts-node --project tsconfig.json worker.ts",
+    "build": "tsc --project tsconfig.json",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.1",
+    "dotenv": "^17.2.3",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "prisma": "^6.2.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

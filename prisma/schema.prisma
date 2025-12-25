@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Pnode {
+  id        Int      @id @default(autoincrement())
+  pubkey    String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // GLOBAL fetch state for stats (exponential backoff, reachability, etc.)
+  isPublic           Boolean   @default(false)
+  failureCount       Int       @default(0)
+  lastStatsAttemptAt DateTime?
+  lastStatsSuccessAt DateTime?
+  nextStatsAllowedAt DateTime?
+
+  // Credits fields
+  latestCredits    Int?
+  creditsUpdatedAt DateTime?
+
+  gossipObservations PnodeGossipObservation[]
+  statsSamples       PnodeStatsSample[]
+}
+
+model PnodeGossipObservation {
+  id Int @id @default(autoincrement())
+
+  seedBaseUrl String
+
+  pnode   Pnode @relation(fields: [pnodeId], references: [id])
+  pnodeId Int
+
+  address           String // "ip:port"
+  version           String?
+  lastSeenTimestamp BigInt? // raw unix timestamp from gossip (seconds)
+  observedAt        DateTime @default(now())
+  
+  // Storage fields from get-pods-with-stats
+  storageCommitted     BigInt?
+  storageUsed          BigInt?
+  storageUsagePercent  Float?  // Decimal value (0-1 or 0-100, will convert to percentage)
+  isPublic             Boolean? // Visibility status from gossip API
+
+  @@index([pnodeId])
+  @@index([seedBaseUrl])
+  @@index([observedAt])
+}
+
+model PnodeStatsSample {
+  id Int @id @default(autoincrement())
+
+  pnode   Pnode @relation(fields: [pnodeId], references: [id])
+  pnodeId Int
+
+  seedBaseUrl String?
+
+  timestamp                 DateTime @default(now())
+  uptimeSeconds             Int?
+  packetsInPerSec           Float?
+  packetsOutPerSec          Float?
+  packetsReceivedCumulative BigInt? // cumulative packets_received for computing per-second
+  packetsSentCumulative     BigInt? // cumulative packets_sent for computing per-second
+  totalBytes                BigInt?
+  activeStreams             Int?
+
+  @@index([pnodeId])
+  @@index([seedBaseUrl])
+  @@index([timestamp])
+}
+
+model PodCreditsSnapshot {
+  id         Int      @id @default(autoincrement())
+  podPubkey  String
+  credits    Int
+  observedAt DateTime @default(now())
+  seedBaseUrl String?
+
+  @@index([podPubkey, observedAt])
+}
+
+model IngestionRun {
+  id          Int       @id @default(autoincrement())
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  attempted   Int       @default(0)
+  success     Int       @default(0)
+  backoff     Int       @default(0)
+  failed      Int       @default(0)
+  observed    Int       @default(0) // unique pnodes observed across all seeds
+
+  seedStats   IngestionRunSeedStats[]
+  networkSnapshot NetworkSnapshot?
+
+  @@index([startedAt])
+}
+
+model IngestionRunSeedStats {
+  id             Int       @id @default(autoincrement())
+  ingestionRun   IngestionRun @relation(fields: [ingestionRunId], references: [id])
+  ingestionRunId Int
+  seedBaseUrl    String
+  attempted      Int       @default(0)
+  backoff        Int       @default(0)
+  success        Int       @default(0)
+  failed         Int       @default(0)
+  observed       Int       @default(0) // unique pnodes observed in gossip
+
+  @@unique([ingestionRunId, seedBaseUrl])
+  @@index([ingestionRunId])
+  @@index([seedBaseUrl])
+}
+
+model NetworkSnapshot {
+  id                     Int      @id @default(autoincrement())
+  ingestionRun           IngestionRun @relation(fields: [ingestionRunId], references: [id])
+  ingestionRunId         Int      @unique
+
+  totalNodes             Int
+  reachableNodes         Int
+  unreachableNodes       Int
+  reachablePercent       Float
+
+  medianUptimeSeconds    Int
+  p90UptimeSeconds       Int
+
+  totalStorageCommitted  BigInt
+  totalStorageUsed       BigInt
+
+  nodesBackedOff         Int
+  nodesFailingStats      Int
+
+  createdAt              DateTime @default(now())
+
+  versionStats           NetworkVersionStat[]
+  seedVisibility         NetworkSeedVisibility[]
+  creditsStat            NetworkCreditsStat?
+
+  @@index([ingestionRunId])
+  @@index([createdAt])
+}
+
+model NetworkVersionStat {
+  id              Int      @id @default(autoincrement())
+  networkSnapshot NetworkSnapshot @relation(fields: [networkSnapshotId], references: [id])
+  networkSnapshotId Int
+  ingestionRunId  Int
+  version         String
+  nodeCount       Int
+
+  @@index([ingestionRunId])
+  @@index([networkSnapshotId])
+}
+
+model NetworkSeedVisibility {
+  id              Int      @id @default(autoincrement())
+  networkSnapshot NetworkSnapshot @relation(fields: [networkSnapshotId], references: [id])
+  networkSnapshotId Int
+  ingestionRunId  Int
+  seedBaseUrl     String
+
+  nodesSeen       Int
+  freshNodes      Int
+  staleNodes      Int
+  offlineNodes    Int
+
+  @@index([ingestionRunId])
+  @@index([networkSnapshotId])
+  @@index([seedBaseUrl])
+}
+
+model NetworkCreditsStat {
+  id              Int      @id @default(autoincrement())
+  networkSnapshot NetworkSnapshot @relation(fields: [networkSnapshotId], references: [id], onDelete: Cascade)
+  networkSnapshotId Int      @unique
+  ingestionRunId  Int
+
+  medianCredits   Int
+  p90Credits      Int
+
+  @@index([ingestionRunId])
+  @@index([networkSnapshotId])
+}
