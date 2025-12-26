@@ -10,34 +10,49 @@ function percentile(sortedValues: number[], p: number): number {
 }
 
 export async function computeNetworkMetrics(ingestionRunId: number) {
-  // Get all nodes with their latest data
-  const nodes = await prisma.pnode.findMany({
-    select: {
-      id: true,
-      isPublic: true,
-      failureCount: true,
-      latestCredits: true,
-      statsSamples: {
-        orderBy: { timestamp: "desc" },
-        take: 1,
-        select: {
-          uptimeSeconds: true,
+  // Get all nodes with their latest data using pagination to avoid memory issues
+  const BATCH_SIZE = 500;
+  const nodes = [];
+  let skip = 0;
+
+  while (true) {
+    const batch = await prisma.pnode.findMany({
+      skip,
+      take: BATCH_SIZE,
+      select: {
+        id: true,
+        isPublic: true,
+        failureCount: true,
+        latestCredits: true,
+        statsSamples: {
+          orderBy: { timestamp: "desc" },
+          take: 1,
+          select: {
+            uptimeSeconds: true,
+          },
+        },
+        gossipObservations: {
+          orderBy: { observedAt: "desc" },
+          take: 1,
+          select: {
+            storageCommitted: true,
+            storageUsed: true,
+            seedBaseUrl: true,
+            lastSeenTimestamp: true,
+            observedAt: true,
+            version: true,
+          },
         },
       },
-      gossipObservations: {
-        orderBy: { observedAt: "desc" },
-        take: 1,
-        select: {
-          storageCommitted: true,
-          storageUsed: true,
-          seedBaseUrl: true,
-          lastSeenTimestamp: true,
-          observedAt: true,
-          version: true,
-        },
-      },
-    },
-  });
+    });
+
+    if (batch.length === 0) break;
+    nodes.push(...batch);
+    skip += BATCH_SIZE;
+    
+    // Safety limit to prevent infinite loop
+    if (skip > 100000) break;
+  }
 
   const now = Date.now() / 1000; // Current time in seconds (Unix timestamp)
 

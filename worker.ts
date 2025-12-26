@@ -5,6 +5,7 @@ import { prisma } from "./lib/db";
 import { runIngestionCycle } from "./lib/ingest";
 import { ingestCredits } from "./lib/ingest/credits";
 import { computeNetworkMetrics } from "./lib/network-metrics";
+import { cleanupOldData } from "./lib/cleanup";
 import { INGEST_INTERVAL_SECONDS, CREDITS_INTERVAL_SECONDS } from "./constants";
 
 async function runOnce() {
@@ -78,12 +79,23 @@ async function runCreditsOnce() {
   }
 }
 
+async function runCleanupOnce() {
+  try {
+    await cleanupOldData();
+  } catch (err) {
+    // Cleanup failed, don't crash the worker
+  }
+}
+
 async function main() {
   // Run stats ingestion once immediately on startup
   await runOnce().catch(() => {});
 
   // Run credits ingestion once immediately on startup
   await runCreditsOnce();
+
+  // Run cleanup once on startup
+  await runCleanupOnce();
 
   // Stats ingestion: every INGEST_INTERVAL_SECONDS
   setInterval(() => {
@@ -94,6 +106,11 @@ async function main() {
   setInterval(() => {
     runCreditsOnce();
   }, CREDITS_INTERVAL_SECONDS * 1000);
+
+  // Cleanup: run daily (every 24 hours)
+  setInterval(() => {
+    runCleanupOnce();
+  }, 24 * 60 * 60 * 1000);
 }
 
 // Handle graceful shutdown
