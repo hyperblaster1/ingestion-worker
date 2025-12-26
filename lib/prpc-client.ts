@@ -72,8 +72,6 @@ async function prpcCall<T>(
   // Construct the RPC endpoint URL
   const rpcUrl = new URL("/rpc", parsedUrl);
 
-  console.log(`[prpcCall] Calling ${method} at ${rpcUrl.toString()}`);
-
   // Use native http/https modules as undici has issues with some URLs
   const requestModule = rpcUrl.protocol === "https:" ? https : http;
 
@@ -220,7 +218,6 @@ export async function getStorageCredits(): Promise<StorageCreditsResult> {
     const data = await response.json();
     return data as StorageCreditsResult;
   } catch (error) {
-    console.error(`[getStorageCredits] Failed to fetch from ${url}:`, error);
     throw error;
   }
 }

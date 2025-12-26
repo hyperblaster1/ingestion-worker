@@ -38,7 +38,6 @@ export async function runIngestionCycle() {
       try {
         podsResult = await getPods(baseUrl);
       } catch (err) {
-        console.error(`Failed get-pods from seed ${baseUrl}`, err);
         return {
           pods: [],
           statsTasks: [],
@@ -158,11 +157,6 @@ export async function runIngestionCycle() {
                 baseUrl,
               };
             } catch (err) {
-              // Log pod processing failures for debugging
-              console.error(
-                `[Ingestion] Failed to process pod ${address} (pubkey: ${pubkey}) from seed ${baseUrl}:`,
-                err
-              );
               throw err; // Re-throw to be caught by Promise.allSettled
             }
           })
@@ -177,21 +171,11 @@ export async function runIngestionCycle() {
         baseUrl: string;
       }> = [];
 
-      // Track failed pods for debugging
-      let failedPods = 0;
+      // Track failed pods
       for (const result of podResults) {
         if (result.status === "fulfilled" && result.value !== null) {
           statsTasks.push(result.value);
-        } else if (result.status === "rejected") {
-          failedPods++;
-          // Error already logged in the try-catch above
         }
-      }
-
-      if (failedPods > 0) {
-        console.warn(
-          `[Ingestion] Seed ${baseUrl}: ${failedPods}/${pods.length} pods failed to process`
-        );
       }
 
       return {
@@ -255,17 +239,6 @@ export async function runIngestionCycle() {
     }
   }
   const deduplicatedStatsTasks = Array.from(uniqueStatsTasks.values());
-
-  // Log deduplication savings
-  if (allStatsTasks.length !== deduplicatedStatsTasks.length) {
-    console.log(
-      `[Ingestion] Deduplicated stats tasks: ${allStatsTasks.length} → ${
-        deduplicatedStatsTasks.length
-      } (saved ${
-        allStatsTasks.length - deduplicatedStatsTasks.length
-      } redundant calls)`
-    );
-  }
 
   statsAttempts = deduplicatedStatsTasks.length;
 
@@ -366,11 +339,6 @@ export async function runIngestionCycle() {
 
         return { success: true, pnodeId, failureCount, seedBaseUrl };
       } catch (err) {
-        console.error(
-          `get-stats failed for ${address} from seed ${baseUrl}`,
-          err
-        );
-
         const newFailureCount = failureCount + 1;
         const delaySeconds = computeNextBackoff(newFailureCount, 60);
 
