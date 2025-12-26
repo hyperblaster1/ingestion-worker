@@ -146,10 +146,18 @@ async function prpcCall<T>(
             rejectOnce(new Error(`Failed to parse JSON response: ${e}`));
           }
         });
+        res.on("error", (err) => {
+          res.destroy();
+          req.destroy();
+          rejectOnce(
+            new Error(`pRPC response error for ${method}: ${err.message}`)
+          );
+        });
       }
     );
 
     req.on("error", (err) => {
+      req.destroy();
       rejectOnce(
         new Error(`pRPC request failed for ${method}: ${err.message}`)
       );
