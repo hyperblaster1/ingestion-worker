@@ -16,3 +16,17 @@ export const NETWORK_METRICS_FRESH_NODE_THRESHOLD_SECONDS = 30;
 export const NETWORK_METRICS_STALE_NODE_THRESHOLD_SECONDS = 120;
 export const NETWORK_METRICS_RECENT_OBSERVATION_WINDOW_MINUTES = 10;
 
+// Database Cleanup Thresholds (row counts)
+export const GOSSIP_OBSERVATION_THRESHOLD = 1_000_000; // 1M rows
+export const STATS_SAMPLE_THRESHOLD = 500_000; // 500K rows
+export const INGESTION_RUN_THRESHOLD = 10_000; // 10K runs
+
+// Cleanup trigger at 90% of threshold
+export const CLEANUP_TRIGGER_PERCENT = 0.90;
+
+// Cleanup target: bring down to 70% of threshold
+export const CLEANUP_TARGET_PERCENT = 0.70;
+
+// Check interval (in seconds)
+export const CLEANUP_CHECK_INTERVAL_SECONDS = 3600; // 1 hour
+
