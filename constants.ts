@@ -1,7 +1,7 @@
 // ===== INGESTION WORKER CONSTANTS =====
 
 // Ingestion Intervals (seconds)
-export const INGEST_INTERVAL_SECONDS = 30; // 30 seconds
+export const INGEST_INTERVAL_SECONDS = 240; // 4 minutes
 export const CREDITS_INTERVAL_SECONDS = 7200; // 2 hours
 
 // Backoff Configuration
