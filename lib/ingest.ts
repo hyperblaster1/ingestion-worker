@@ -242,119 +242,133 @@ export async function runIngestionCycle() {
 
   statsAttempts = deduplicatedStatsTasks.length;
 
-  // Process DEDUPLICATED stats requests in parallel
-  const statsResults = await Promise.allSettled(
-    deduplicatedStatsTasks.map(async (task) => {
-      const {
-        pnodeId,
-        seedBaseUrl,
-        address,
-        statsBaseUrl,
-        failureCount,
-        baseUrl,
-      } = task;
+  // Process DEDUPLICATED stats requests in batches of 50
+  const BATCH_SIZE = 50;
+  const statsResults: PromiseSettledResult<{
+    success: boolean;
+    pnodeId: number;
+    failureCount: number;
+    seedBaseUrl: string;
+  }>[] = [];
 
-      try {
-        const stats = await getStats(statsBaseUrl);
+  for (let i = 0; i < deduplicatedStatsTasks.length; i += BATCH_SIZE) {
+    const batch = deduplicatedStatsTasks.slice(i, i + BATCH_SIZE);
 
-        // Extract fields from actual API response structure
-        const latestTotalBytes =
-          stats.total_bytes != null ? BigInt(stats.total_bytes) : null;
-        const uptimeSeconds = stats.uptime != null ? stats.uptime : null;
-        const activeStreams = stats.active_streams ?? null;
-        const packetsReceivedCumulative =
-          stats.packets_received != null
-            ? BigInt(stats.packets_received)
-            : null;
-        const packetsSentCumulative =
-          stats.packets_sent != null ? BigInt(stats.packets_sent) : null;
+    const batchResults = await Promise.allSettled(
+      batch.map(async (task) => {
+        const {
+          pnodeId,
+          seedBaseUrl,
+          address,
+          statsBaseUrl,
+          failureCount,
+          baseUrl,
+        } = task;
 
-        // Get previous sample for this pnode (any seed or same seed; choose simplest)
-        const prevSample = await prisma.pnodeStatsSample.findFirst({
-          where: { pnodeId },
-          orderBy: { timestamp: "desc" },
-        });
+        try {
+          const stats = await getStats(statsBaseUrl);
 
-        const latestSampleTimestamp = new Date();
+          // Extract fields from actual API response structure
+          const latestTotalBytes =
+            stats.total_bytes != null ? BigInt(stats.total_bytes) : null;
+          const uptimeSeconds = stats.uptime != null ? stats.uptime : null;
+          const activeStreams = stats.active_streams ?? null;
+          const packetsReceivedCumulative =
+            stats.packets_received != null
+              ? BigInt(stats.packets_received)
+              : null;
+          const packetsSentCumulative =
+            stats.packets_sent != null ? BigInt(stats.packets_sent) : null;
 
-        // Compute packets per second from cumulative values
-        let packetsInPerSec: number | null = null;
-        let packetsOutPerSec: number | null = null;
+          // Get previous sample for this pnode (any seed or same seed; choose simplest)
+          const prevSample = await prisma.pnodeStatsSample.findFirst({
+            where: { pnodeId },
+            orderBy: { timestamp: "desc" },
+          });
 
-        if (
-          prevSample &&
-          prevSample.timestamp &&
-          packetsReceivedCumulative != null &&
-          packetsSentCumulative != null &&
-          prevSample.packetsReceivedCumulative != null &&
-          prevSample.packetsSentCumulative != null
-        ) {
-          const deltaMs =
-            latestSampleTimestamp.getTime() - prevSample.timestamp.getTime();
-          const deltaSeconds = Math.floor(deltaMs / 1000);
+          const latestSampleTimestamp = new Date();
 
-          if (deltaSeconds > 5) {
-            const deltaPacketsReceived =
-              packetsReceivedCumulative - prevSample.packetsReceivedCumulative;
-            const deltaPacketsSent =
-              packetsSentCumulative - prevSample.packetsSentCumulative;
+          // Compute packets per second from cumulative values
+          let packetsInPerSec: number | null = null;
+          let packetsOutPerSec: number | null = null;
 
-            // Only compute if delta is positive (counter didn't reset)
-            if (deltaPacketsReceived >= BigInt(0)) {
-              packetsInPerSec = Number(deltaPacketsReceived) / deltaSeconds;
-            }
-            if (deltaPacketsSent >= BigInt(0)) {
-              packetsOutPerSec = Number(deltaPacketsSent) / deltaSeconds;
+          if (
+            prevSample &&
+            prevSample.timestamp &&
+            packetsReceivedCumulative != null &&
+            packetsSentCumulative != null &&
+            prevSample.packetsReceivedCumulative != null &&
+            prevSample.packetsSentCumulative != null
+          ) {
+            const deltaMs =
+              latestSampleTimestamp.getTime() - prevSample.timestamp.getTime();
+            const deltaSeconds = Math.floor(deltaMs / 1000);
+
+            if (deltaSeconds > 5) {
+              const deltaPacketsReceived =
+                packetsReceivedCumulative -
+                prevSample.packetsReceivedCumulative;
+              const deltaPacketsSent =
+                packetsSentCumulative - prevSample.packetsSentCumulative;
+
+              // Only compute if delta is positive (counter didn't reset)
+              if (deltaPacketsReceived >= BigInt(0)) {
+                packetsInPerSec = Number(deltaPacketsReceived) / deltaSeconds;
+              }
+              if (deltaPacketsSent >= BigInt(0)) {
+                packetsOutPerSec = Number(deltaPacketsSent) / deltaSeconds;
+              }
             }
           }
+
+          // Record stats
+          await prisma.pnodeStatsSample.create({
+            data: {
+              pnodeId,
+              seedBaseUrl,
+              timestamp: latestSampleTimestamp,
+              uptimeSeconds,
+              packetsInPerSec,
+              packetsOutPerSec,
+              packetsReceivedCumulative,
+              packetsSentCumulative,
+              totalBytes: latestTotalBytes,
+              activeStreams,
+            },
+          });
+
+          // Update backoff state on success
+          // Note: isPublic should be set from gossip data, not stats success
+          await prisma.pnode.update({
+            where: { id: pnodeId },
+            data: {
+              failureCount: 0,
+              lastStatsAttemptAt: now,
+              lastStatsSuccessAt: now,
+              nextStatsAllowedAt: new Date(now.getTime() + 60 * 1000),
+            },
+          });
+
+          return { success: true, pnodeId, failureCount, seedBaseUrl };
+        } catch (err) {
+          const newFailureCount = failureCount + 1;
+          const delaySeconds = computeNextBackoff(newFailureCount, 60);
+
+          await prisma.pnode.update({
+            where: { id: pnodeId },
+            data: {
+              failureCount: newFailureCount,
+              lastStatsAttemptAt: now,
+              nextStatsAllowedAt: new Date(now.getTime() + delaySeconds * 1000),
+            },
+          });
+
+          return { success: false, pnodeId, failureCount, seedBaseUrl };
         }
-
-        // Record stats
-        await prisma.pnodeStatsSample.create({
-          data: {
-            pnodeId,
-            seedBaseUrl,
-            timestamp: latestSampleTimestamp,
-            uptimeSeconds,
-            packetsInPerSec,
-            packetsOutPerSec,
-            packetsReceivedCumulative,
-            packetsSentCumulative,
-            totalBytes: latestTotalBytes,
-            activeStreams,
-          },
-        });
-
-        // Update backoff state on success
-        // Note: isPublic should be set from gossip data, not stats success
-        await prisma.pnode.update({
-          where: { id: pnodeId },
-          data: {
-            failureCount: 0,
-            lastStatsAttemptAt: now,
-            lastStatsSuccessAt: now,
-            nextStatsAllowedAt: new Date(now.getTime() + 60 * 1000),
-          },
-        });
-
-        return { success: true, pnodeId, failureCount, seedBaseUrl };
-      } catch (err) {
-        const newFailureCount = failureCount + 1;
-        const delaySeconds = computeNextBackoff(newFailureCount, 60);
-
-        await prisma.pnode.update({
-          where: { id: pnodeId },
-          data: {
-            failureCount: newFailureCount,
-            lastStatsAttemptAt: now,
-            nextStatsAllowedAt: new Date(now.getTime() + delaySeconds * 1000),
-          },
-        });
-
-        return { success: false, pnodeId, failureCount, seedBaseUrl };
-      }
-    })
-  );
+      })
+    );
+    statsResults.push(...batchResults);
+  }
 
   // Count successes and failures (global and per-seed)
   for (const result of statsResults) {
