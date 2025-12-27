@@ -4,12 +4,12 @@ import { getStorageCredits } from '../prpc-client';
 
 /**
  * Ingest credits for all pods from the centralized API
- * Enforces 24-hour polling rule per pod
+ * Enforces 2-hour polling rule per pod
  * API: https://podcredits.xandeum.network/api/pods-credits
  */
 export async function ingestCredits() {
   const now = new Date();
-  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
 
   let totalProcessed = 0;
   let totalSkipped = 0;
@@ -39,7 +39,7 @@ export async function ingestCredits() {
           continue;
         }
 
-        // Check if we have a recent snapshot (within 24 hours)
+        // Check if we have a recent snapshot (within 2 hours)
         const latestSnapshot = await prisma.podCreditsSnapshot.findFirst({
           where: { podPubkey },
           orderBy: { observedAt: 'desc' },
@@ -47,7 +47,7 @@ export async function ingestCredits() {
 
         if (
           latestSnapshot &&
-          latestSnapshot.observedAt > twentyFourHoursAgo
+          latestSnapshot.observedAt > twoHoursAgo
         ) {
           // Skip - too recent
           totalSkipped++;

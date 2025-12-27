@@ -22,11 +22,10 @@ export const STATS_SAMPLE_THRESHOLD = 500_000; // 500K rows
 export const INGESTION_RUN_THRESHOLD = 10_000; // 10K runs
 
 // Cleanup trigger at 90% of threshold
-export const CLEANUP_TRIGGER_PERCENT = 0.90;
+export const CLEANUP_TRIGGER_PERCENT = 0.9;
 
 // Cleanup target: bring down to 70% of threshold
-export const CLEANUP_TARGET_PERCENT = 0.70;
+export const CLEANUP_TARGET_PERCENT = 0.7;
 
 // Check interval (in seconds)
 export const CLEANUP_CHECK_INTERVAL_SECONDS = 3600; // 1 hour
-
