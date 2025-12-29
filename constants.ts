@@ -16,10 +16,10 @@ export const NETWORK_METRICS_FRESH_NODE_THRESHOLD_SECONDS = 30;
 export const NETWORK_METRICS_STALE_NODE_THRESHOLD_SECONDS = 120;
 export const NETWORK_METRICS_RECENT_OBSERVATION_WINDOW_MINUTES = 10;
 
-// Database Cleanup Thresholds (row counts)
-export const GOSSIP_OBSERVATION_THRESHOLD = 1_000_000; // 1M rows
-export const STATS_SAMPLE_THRESHOLD = 500_000; // 500K rows
-export const INGESTION_RUN_THRESHOLD = 10_000; // 10K runs
+// Database Cleanup Thresholds (row counts) - ~20 days retention
+export const GOSSIP_OBSERVATION_THRESHOLD = 300_000; // 300K rows (~20 days)
+export const STATS_SAMPLE_THRESHOLD = 300_000; // 300K rows (~20 days)
+export const INGESTION_RUN_THRESHOLD = 7_500; // ~21 days of runs (360 runs/day * 21)
 
 // Cleanup trigger at 90% of threshold
 export const CLEANUP_TRIGGER_PERCENT = 0.9;
