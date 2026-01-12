@@ -19,32 +19,32 @@ export async function computeNetworkMetrics(ingestionRunId: number) {
     const batch = await prisma.pnode.findMany({
       skip,
       take: BATCH_SIZE,
-      select: {
-        id: true,
-        isPublic: true,
-        failureCount: true,
-        latestCredits: true,
-        statsSamples: {
-          orderBy: { timestamp: "desc" },
-          take: 1,
-          select: {
-            uptimeSeconds: true,
-          },
-        },
-        gossipObservations: {
-          orderBy: { observedAt: "desc" },
-          take: 1,
-          select: {
-            storageCommitted: true,
-            storageUsed: true,
-            seedBaseUrl: true,
-            lastSeenTimestamp: true,
-            observedAt: true,
-            version: true,
-          },
+    select: {
+      id: true,
+      isPublic: true,
+      failureCount: true,
+      latestCredits: true,
+      statsSamples: {
+        orderBy: { timestamp: "desc" },
+        take: 1,
+        select: {
+          uptimeSeconds: true,
         },
       },
-    });
+      gossipObservations: {
+        orderBy: { observedAt: "desc" },
+        take: 1,
+        select: {
+          storageCommitted: true,
+          storageUsed: true,
+          seedBaseUrl: true,
+          lastSeenTimestamp: true,
+          observedAt: true,
+          version: true,
+        },
+      },
+    },
+  });
 
     if (batch.length === 0) break;
     nodes.push(...batch);

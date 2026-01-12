@@ -13,8 +13,41 @@ function computeNextBackoff(failureCount: number, baseSeconds = 60): number {
   return baseSeconds * Math.pow(2, cappedFailures);
 }
 
+/**
+ * Reset nodes that have been in backoff for too long (e.g., after worker downtime)
+ * This ensures nodes aren't permanently stuck after the worker restarts
+ */
+async function resetStaleBackoffStates() {
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  
+  const result = await prisma.pnode.updateMany({
+    where: {
+      nextStatsAllowedAt: {
+        lt: oneDayAgo, // If backoff expired more than a day ago
+      },
+      failureCount: {
+        gt: 0, // And has a failure count
+      },
+    },
+    data: {
+      failureCount: 0,
+      nextStatsAllowedAt: null,
+    },
+  });
+  
+  if (result.count > 0) {
+    console.log(`[Ingest] Reset ${result.count} nodes from stale backoff state`);
+  }
+  
+  return result.count;
+}
+
 export async function runIngestionCycle() {
   const seeds = DEFAULT_SEEDS;
+  console.log(`[Ingest] Starting cycle with ${seeds.length} seeds`);
+
+  // Reset nodes that have been in backoff too long (after downtime)
+  await resetStaleBackoffStates();
 
   let totalPods = 0;
   let gossipObs = 0;
@@ -36,8 +69,19 @@ export async function runIngestionCycle() {
       let podsResult: GetPodsResult;
 
       try {
+        console.log(`[Ingest] Fetching pods from ${baseUrl}...`);
         podsResult = await getPods(baseUrl);
+        const podCount = Array.isArray(podsResult) ? podsResult.length : podsResult.pods?.length || 0;
+        console.log(`[Ingest] Received pods from ${baseUrl}: ${podCount} pods`);
       } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : undefined;
+        console.error(`[Ingest] Failed to fetch pods from ${baseUrl}:`, {
+          error: errorMessage,
+          stack: errorStack,
+          seed: baseUrl,
+          timestamp: new Date().toISOString(),
+        });
         return {
           pods: [],
           statsTasks: [],
@@ -139,6 +183,12 @@ export async function runIngestionCycle() {
                 backoffPnodeIds.add(pnode.id);
                 seedBackoff++;
                 return null;
+              } else if (nextStatsAllowedAt && nextStatsAllowedAt <= now && failureCount > 0) {
+                // Backoff expired but failureCount still set - should have been reset but clear it now
+                await prisma.pnode.update({
+                  where: { id: pnode.id },
+                  data: { failureCount: 0, nextStatsAllowedAt: null },
+                });
               }
 
               // This pnode will be attempted
@@ -241,6 +291,8 @@ export async function runIngestionCycle() {
   const deduplicatedStatsTasks = Array.from(uniqueStatsTasks.values());
 
   statsAttempts = deduplicatedStatsTasks.length;
+  console.log(`[Ingest] Total unique nodes to fetch stats: ${statsAttempts}`);
+  console.log(`[Ingest] Backoff nodes (skipped): ${backoffPnodeIds.size}`);
 
   // Process DEDUPLICATED stats requests in batches of 50
   const BATCH_SIZE = 50;
@@ -251,122 +303,139 @@ export async function runIngestionCycle() {
     seedBaseUrl: string;
   }>[] = [];
 
+  const totalBatches = Math.ceil(deduplicatedStatsTasks.length / BATCH_SIZE);
+  console.log(`[Ingest] Processing ${totalBatches} batches of ${BATCH_SIZE}...`);
+
   for (let i = 0; i < deduplicatedStatsTasks.length; i += BATCH_SIZE) {
     const batch = deduplicatedStatsTasks.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    console.log(`[Ingest] Batch ${batchNum}/${totalBatches}: Processing ${batch.length} nodes...`);
 
     const batchResults = await Promise.allSettled(
       batch.map(async (task) => {
-        const {
-          pnodeId,
-          seedBaseUrl,
-          address,
-          statsBaseUrl,
-          failureCount,
-          baseUrl,
-        } = task;
+      const {
+        pnodeId,
+        seedBaseUrl,
+        address,
+        statsBaseUrl,
+        failureCount,
+        baseUrl,
+      } = task;
 
-        try {
-          const stats = await getStats(statsBaseUrl);
+      try {
+        const stats = await getStats(statsBaseUrl);
 
-          // Extract fields from actual API response structure
-          const latestTotalBytes =
-            stats.total_bytes != null ? BigInt(stats.total_bytes) : null;
-          const uptimeSeconds = stats.uptime != null ? stats.uptime : null;
-          const activeStreams = stats.active_streams ?? null;
-          const packetsReceivedCumulative =
-            stats.packets_received != null
-              ? BigInt(stats.packets_received)
-              : null;
-          const packetsSentCumulative =
-            stats.packets_sent != null ? BigInt(stats.packets_sent) : null;
+        // Extract fields from actual API response structure
+        const latestTotalBytes =
+          stats.total_bytes != null ? BigInt(stats.total_bytes) : null;
+        const uptimeSeconds = stats.uptime != null ? stats.uptime : null;
+        const activeStreams = stats.active_streams ?? null;
+        const packetsReceivedCumulative =
+          stats.packets_received != null
+            ? BigInt(stats.packets_received)
+            : null;
+        const packetsSentCumulative =
+          stats.packets_sent != null ? BigInt(stats.packets_sent) : null;
 
-          // Get previous sample for this pnode (any seed or same seed; choose simplest)
-          const prevSample = await prisma.pnodeStatsSample.findFirst({
-            where: { pnodeId },
-            orderBy: { timestamp: "desc" },
-          });
+        // Get previous sample for this pnode (any seed or same seed; choose simplest)
+        const prevSample = await prisma.pnodeStatsSample.findFirst({
+          where: { pnodeId },
+          orderBy: { timestamp: "desc" },
+        });
 
-          const latestSampleTimestamp = new Date();
+        const latestSampleTimestamp = new Date();
 
-          // Compute packets per second from cumulative values
-          let packetsInPerSec: number | null = null;
-          let packetsOutPerSec: number | null = null;
+        // Compute packets per second from cumulative values
+        let packetsInPerSec: number | null = null;
+        let packetsOutPerSec: number | null = null;
 
-          if (
-            prevSample &&
-            prevSample.timestamp &&
-            packetsReceivedCumulative != null &&
-            packetsSentCumulative != null &&
-            prevSample.packetsReceivedCumulative != null &&
-            prevSample.packetsSentCumulative != null
-          ) {
-            const deltaMs =
-              latestSampleTimestamp.getTime() - prevSample.timestamp.getTime();
-            const deltaSeconds = Math.floor(deltaMs / 1000);
+        if (
+          prevSample &&
+          prevSample.timestamp &&
+          packetsReceivedCumulative != null &&
+          packetsSentCumulative != null &&
+          prevSample.packetsReceivedCumulative != null &&
+          prevSample.packetsSentCumulative != null
+        ) {
+          const deltaMs =
+            latestSampleTimestamp.getTime() - prevSample.timestamp.getTime();
+          const deltaSeconds = Math.floor(deltaMs / 1000);
 
-            if (deltaSeconds > 5) {
-              const deltaPacketsReceived =
+          if (deltaSeconds > 5) {
+            const deltaPacketsReceived =
                 packetsReceivedCumulative -
                 prevSample.packetsReceivedCumulative;
-              const deltaPacketsSent =
-                packetsSentCumulative - prevSample.packetsSentCumulative;
+            const deltaPacketsSent =
+              packetsSentCumulative - prevSample.packetsSentCumulative;
 
-              // Only compute if delta is positive (counter didn't reset)
-              if (deltaPacketsReceived >= BigInt(0)) {
-                packetsInPerSec = Number(deltaPacketsReceived) / deltaSeconds;
-              }
-              if (deltaPacketsSent >= BigInt(0)) {
-                packetsOutPerSec = Number(deltaPacketsSent) / deltaSeconds;
-              }
+            // Only compute if delta is positive (counter didn't reset)
+            if (deltaPacketsReceived >= BigInt(0)) {
+              packetsInPerSec = Number(deltaPacketsReceived) / deltaSeconds;
+            }
+            if (deltaPacketsSent >= BigInt(0)) {
+              packetsOutPerSec = Number(deltaPacketsSent) / deltaSeconds;
             }
           }
-
-          // Record stats
-          await prisma.pnodeStatsSample.create({
-            data: {
-              pnodeId,
-              seedBaseUrl,
-              timestamp: latestSampleTimestamp,
-              uptimeSeconds,
-              packetsInPerSec,
-              packetsOutPerSec,
-              packetsReceivedCumulative,
-              packetsSentCumulative,
-              totalBytes: latestTotalBytes,
-              activeStreams,
-            },
-          });
-
-          // Update backoff state on success
-          // Note: isPublic should be set from gossip data, not stats success
-          await prisma.pnode.update({
-            where: { id: pnodeId },
-            data: {
-              failureCount: 0,
-              lastStatsAttemptAt: now,
-              lastStatsSuccessAt: now,
-              nextStatsAllowedAt: new Date(now.getTime() + 60 * 1000),
-            },
-          });
-
-          return { success: true, pnodeId, failureCount, seedBaseUrl };
-        } catch (err) {
-          const newFailureCount = failureCount + 1;
-          const delaySeconds = computeNextBackoff(newFailureCount, 60);
-
-          await prisma.pnode.update({
-            where: { id: pnodeId },
-            data: {
-              failureCount: newFailureCount,
-              lastStatsAttemptAt: now,
-              nextStatsAllowedAt: new Date(now.getTime() + delaySeconds * 1000),
-            },
-          });
-
-          return { success: false, pnodeId, failureCount, seedBaseUrl };
         }
-      })
-    );
+
+        // Record stats
+        await prisma.pnodeStatsSample.create({
+          data: {
+            pnodeId,
+            seedBaseUrl,
+            timestamp: latestSampleTimestamp,
+            uptimeSeconds,
+            packetsInPerSec,
+            packetsOutPerSec,
+            packetsReceivedCumulative,
+            packetsSentCumulative,
+            totalBytes: latestTotalBytes,
+            activeStreams,
+          },
+        });
+
+        // Update backoff state on success
+        // Note: isPublic should be set from gossip data, not stats success
+        await prisma.pnode.update({
+          where: { id: pnodeId },
+          data: {
+            failureCount: 0,
+            lastStatsAttemptAt: now,
+            lastStatsSuccessAt: now,
+            nextStatsAllowedAt: new Date(now.getTime() + 60 * 1000),
+          },
+        });
+
+        return { success: true, pnodeId, failureCount, seedBaseUrl };
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const newFailureCount = failureCount + 1;
+        const delaySeconds = computeNextBackoff(newFailureCount, 60);
+
+        // Log structured error for debugging
+        console.error(`[Ingest] Stats fetch failed for pnode ${pnodeId} (${statsBaseUrl}):`, {
+          error: errorMessage,
+          pnodeId,
+          statsBaseUrl,
+          failureCount: newFailureCount,
+          backoffSeconds: delaySeconds,
+          seedBaseUrl,
+          timestamp: new Date().toISOString(),
+        });
+
+        await prisma.pnode.update({
+          where: { id: pnodeId },
+          data: {
+            failureCount: newFailureCount,
+            lastStatsAttemptAt: now,
+            nextStatsAllowedAt: new Date(now.getTime() + delaySeconds * 1000),
+          },
+        });
+
+        return { success: false, pnodeId, failureCount, seedBaseUrl };
+      }
+    })
+  );
     statsResults.push(...batchResults);
   }
 
@@ -391,11 +460,18 @@ export async function runIngestionCycle() {
       }
     } else {
       statsFailure++;
+      const errorMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      const errorStack = result.reason instanceof Error ? result.reason.stack : undefined;
+      console.error(`[Ingest] Promise rejected in stats batch:`, {
+        error: errorMessage,
+        stack: errorStack,
+        timestamp: new Date().toISOString(),
+      });
       // For rejected promises, we don't know which seed, so we can't track per-seed
     }
   }
 
-  return {
+  const summary = {
     ok: true,
     seedsCount: seeds.length,
     totalPods,
@@ -407,4 +483,8 @@ export async function runIngestionCycle() {
     observed: globalObservedPnodeIds.size, // Global count of unique pnodes observed across all seeds
     seedStats: Array.from(seedStatsMap.values()),
   };
+
+  console.log(`[Ingest] Cycle complete: pods=${summary.totalPods}, observed=${summary.observed}, attempted=${summary.statsAttempts}, success=${summary.statsSuccess}, failed=${summary.statsFailure}, backoff=${summary.backoffCount}`);
+
+  return summary;
 }
