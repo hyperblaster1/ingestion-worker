@@ -20,6 +20,8 @@ export async function checkAndCleanupIfNeeded() {
   const statsThreshold = STATS_SAMPLE_THRESHOLD * CLEANUP_TRIGGER_PERCENT;
   const runsThreshold = INGESTION_RUN_THRESHOLD * CLEANUP_TRIGGER_PERCENT;
 
+  //console.log
+
   const needsCleanup =
     gossipCount > gossipThreshold ||
     statsCount > statsThreshold ||
